@@ -1,50 +1,68 @@
 use std::fmt;
 
 #[derive(Clone)]
-struct Round {
-    remaining_pins: u8,
-    throws: Vec<Throw>,
+enum Round {
+    First,
+    Second {
+        remaining_pins: u8,
+        first_throw: Throw,
+    },
+    Complete {
+        throws: Vec<Throw>,
+    },
 }
+
+const MAX_PINS: u8 = 10;
 
 impl Round {
     fn new() -> Round {
-        Round {
-            remaining_pins: 10,
-            throws: vec![],
-        }
+        Round::First
     }
 
-    fn role(&mut self, rolled_pins: u8) -> &mut Self {
-        if rolled_pins > self.remaining_pins {
-            return self;
-        };
-        if self.throws.len() >= 2 {
-            return self;
+    fn role(self, rolled_pins: u8) -> Result<Round, String> {
+        match self {
+            Round::Complete { throws: _ } => return Err("Round already completed!".into()),
+            Round::First => match rolled_pins {
+                pins if pins == 0 => Ok(Round::Second {
+                    remaining_pins: MAX_PINS,
+                    first_throw: Throw::Miss,
+                }),
+                pins if pins < MAX_PINS => Ok(Round::Second {
+                    remaining_pins: MAX_PINS - rolled_pins,
+                    first_throw: Throw::Hit(rolled_pins),
+                }),
+                pins if pins == MAX_PINS => Ok(Round::Complete {
+                    throws: vec![Throw::Strike],
+                }),
+                _ => Err("Sorry, but you can not role more than possible.".into()),
+            },
+            Round::Second {
+                remaining_pins,
+                first_throw,
+            } => match rolled_pins {
+                pins if pins == 0 => Ok(Round::Complete {
+                    throws: vec![first_throw, Throw::Miss],
+                }),
+                pins if pins < remaining_pins => Ok(Round::Complete {
+                    throws: vec![first_throw, Throw::Hit(rolled_pins)],
+                }),
+                pins if pins == remaining_pins => Ok(Round::Complete {
+                    throws: vec![first_throw, Throw::Spare(rolled_pins)],
+                }),
+                _ => Err("Sorry, but you can not role more than remain.".into()),
+            },
         }
-        let new_remaining_pins = self.remaining_pins - rolled_pins;
-
-        let throw = match new_remaining_pins {
-            pins if pins == 0 => {
-                if self.throws.len() == 0 {
-                    Some(Throw::Strike)
-                } else {
-                    Some(Throw::Spare(rolled_pins))
-                }
-            }
-            pins if pins < self.remaining_pins => Some(Throw::Hit(rolled_pins)),
-            pins if pins == self.remaining_pins => Some(Throw::Miss),
-            _ => None,
-        };
-
-        if let Some(throw) = throw.clone() {
-            self.throws.push(throw);
-            self.remaining_pins = new_remaining_pins
-        };
-        self
     }
 
     fn last_throw(&self) -> Option<Throw> {
-        self.throws.last().cloned()
+        match self {
+            Round::First => None,
+            Round::Second {
+                remaining_pins: _,
+                first_throw,
+            } => Some(first_throw.clone()),
+            Round::Complete { throws } => throws.iter().last().cloned(),
+        }
     }
 }
 
@@ -70,19 +88,28 @@ impl fmt::Display for Throw {
 
 impl fmt::Display for Round {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let foo: Vec<String> = self.throws.iter().map(|x| x.to_string()).collect();
+        match self {
+            Round::First => write!(f, "[]"),
+            Round::Second {
+                remaining_pins: _,
+                first_throw,
+            } => write!(f, "[{}, ?]", first_throw.to_string()),
+            Round::Complete { throws } => {
+                let foo: Vec<String> = throws.iter().map(|x| x.to_string()).collect();
 
-        write!(f, "[{}]", foo.join(", "))
+                write!(f, "[{}]", foo.join(", "))
+            }
+        }
     }
 }
 
 fn main() {
-    let mut round = Round::new();
-    round.role(1).role(9);
+    let round = Round::new().role(1).unwrap().role(9);
 
-    let last_throw = round.last_throw();
+    let last_throw = round.as_ref().unwrap().last_throw();
 
-    println!("number {round} have bin rolled.");
+    println!("number {} have bin rolled.", round.unwrap());
+    println!("number {} have bin rolled.", Round::new().role(2).unwrap());
     if let Some(last_throw) = last_throw {
         println!("number {last_throw} have bin rolled.");
     }
@@ -94,21 +121,50 @@ mod tests {
 
     #[test]
     fn role_pins_once() {
-        assert_eq!(Round::new().role(0).last_throw(), Some(Throw::Miss));
-        assert_eq!(Round::new().role(1).last_throw(), Some(Throw::Hit(1)));
-        assert_eq!(Round::new().role(5).last_throw(), Some(Throw::Hit(5)));
-        assert_eq!(Round::new().role(10).last_throw(), Some(Throw::Strike));
+        assert_eq!(
+            Round::new().role(0).unwrap().last_throw(),
+            Some(Throw::Miss)
+        );
+        assert_eq!(
+            Round::new().role(1).unwrap().last_throw(),
+            Some(Throw::Hit(1))
+        );
+        assert_eq!(
+            Round::new().role(5).unwrap().last_throw(),
+            Some(Throw::Hit(5))
+        );
+        assert_eq!(
+            Round::new().role(10).unwrap().last_throw(),
+            Some(Throw::Strike)
+        );
     }
 
     #[test]
     fn role_pins_twice() {
-        let mut round = Round::new();
-        round.role(1);
-        assert_eq!(round.clone().role(2).last_throw(), Some(Throw::Hit(2)));
-        assert_eq!(round.clone().role(0).last_throw(), Some(Throw::Miss));
-        assert_eq!(round.clone().role(9).last_throw(), Some(Throw::Spare(9)));
-        // I'm not sure yet how I want to handle errors while bowling?
-        // assert_eq!(round.clone().role(10).last_throw(), None);
+        let round = Round::new().role(1).unwrap();
+        assert_eq!(
+            round.clone().role(2).unwrap().last_throw(),
+            Some(Throw::Hit(2))
+        );
+        assert_eq!(
+            round.clone().role(0).unwrap().last_throw(),
+            Some(Throw::Miss)
+        );
+        assert_eq!(
+            round.clone().role(9).unwrap().last_throw(),
+            Some(Throw::Spare(9))
+        );
+        assert_eq!(round.clone().role(10).is_err(), true);
+    }
+
+    #[test]
+    fn display_empty_round() {
+        assert_eq!(Round::new().to_string(), "[]");
+    }
+
+    #[test]
+    fn display_fist_round() {
+        assert_eq!(Round::new().role(2).unwrap().to_string(), "[2, ?]");
     }
 
     #[test]
@@ -120,24 +176,38 @@ mod tests {
     }
 
     #[test]
-    fn display_round() {
-        assert_eq!(Round::new().role(1).role(2).to_string(), "[1, 2]");
-        assert_eq!(Round::new().role(0).role(10).to_string(), "[-, /]");
-        assert_eq!(Round::new().role(10).role(1).to_string(), "[X]");
-        assert_eq!(Round::new().role(2).role(8).to_string(), "[2, /]");
-        assert_eq!(Round::new().role(8).role(0).to_string(), "[8, -]");
+    fn display_completed_rounds() {
+        assert_eq!(
+            Round::new().role(1).unwrap().role(2).unwrap().to_string(),
+            "[1, 2]"
+        );
+        assert_eq!(
+            Round::new().role(0).unwrap().role(10).unwrap().to_string(),
+            "[-, /]"
+        );
+        assert_eq!(Round::new().role(10).unwrap().to_string(), "[X]");
+        assert_eq!(
+            Round::new().role(2).unwrap().role(8).unwrap().to_string(),
+            "[2, /]"
+        );
     }
 
     #[test]
     fn role_three_times() {
         assert_eq!(
-            Round::new().role(1).role(2).role(3).last_throw(),
-            Some(Throw::Hit(2))
+            Round::new()
+                .role(1)
+                .unwrap()
+                .role(2)
+                .unwrap()
+                .role(3)
+                .is_err(),
+            true
         );
     }
 
     #[test]
     fn role_not_more_then_ten() {
-        assert_eq!(Round::new().role(11).last_throw(), None);
+        assert_eq!(Round::new().role(11).is_err(), true);
     }
 }
